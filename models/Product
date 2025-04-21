@@ -1,0 +1,139 @@
+const { pool }  = require('../config/db');
+
+class Product {
+  static async getAll() {
+    try {
+      const result = await pool.query(
+        `SELECT p.*, 
+                COALESCE((
+                  SELECT SUM(s.quantity)
+                  FROM public.stock s
+                  WHERE s.product_id = p.id
+                ), 0) AS total_quantity
+         FROM public.products p`
+      );
+      return result.rows;
+    } catch (error) {
+      console.error('Error in Product.getAll:', error);
+      throw error;
+    }
+  }
+
+  static async getById(id) {
+    try {
+      const result = await pool.query(
+        `SELECT p.*, 
+                COALESCE((
+                  SELECT SUM(s.quantity)
+                  FROM public.stock s
+                  WHERE s.product_id = p.id
+                ), 0) AS total_quantity
+         FROM public.products p
+         WHERE p.id = $1`,
+        [id]
+      );
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error in Product.getById:', error);
+      throw error;
+    }
+  }
+
+  static async create(name, description, price, category, supplier, status, image) {
+    try {
+      // Validate required fields
+      if (!name || !price) {
+        throw new Error('Name and price are required fields');
+      }
+
+      const result = await pool.query(
+        `INSERT INTO public.products 
+         (name, description, price, category, supplier, status, image) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7) 
+         RETURNING *`,
+        [
+          name,
+          description || '',
+          parseFloat(price),
+          category || '',
+          supplier || '',
+          status || 'in-stock',
+          image
+        ]
+      );
+
+      if (!result.rows[0]) {
+        throw new Error('Failed to create product');
+      }
+
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error in Product.create:', error);
+      throw error;
+    }
+  }
+
+  static async update(id, name, description, price, category, supplier, status, image) {
+    try {
+      // Input validation
+      if (!id) throw new Error('Product ID is required');
+      
+      // Check if the product exists
+      const existingProduct = await this.getById(id);
+      if (!existingProduct) {
+        throw new Error('Product not found');
+      }
+
+      // Sanitize and validate inputs - use existing values if not provided
+      const sanitizedData = {
+        name: name || existingProduct.name,
+        description: description || existingProduct.description,
+        price: price !== undefined ? parseFloat(price) : existingProduct.price,
+        category: category || existingProduct.category,
+        supplier: supplier || existingProduct.supplier,
+        status: status || existingProduct.status,
+        image: image || existingProduct.image
+      };
+
+      const result = await pool.query(
+        `UPDATE public.products 
+         SET name = $1,
+             description = $2,
+             price = $3,
+             category = $4,
+             supplier = $5,
+             status = $6,
+             image = $7,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $8 
+         RETURNING *`,
+        [
+          sanitizedData.name,
+          sanitizedData.description,
+          sanitizedData.price,
+          sanitizedData.category,
+          sanitizedData.supplier,
+          sanitizedData.status,
+          sanitizedData.image,
+          id
+        ]
+      );
+
+      if (!result.rows[0]) {
+        throw new Error('Failed to update product');
+      }
+
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error in Product.update:', error);
+      throw error;
+    }
+  }
+
+  static async delete(id) {
+    const result = await pool.query('DELETE FROM public.products WHERE id = $1', [id]);
+    return result.rowCount > 0;
+  }
+}
+
+module.exports = Product;
