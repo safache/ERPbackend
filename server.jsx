@@ -46,10 +46,10 @@ const PORT = process.env.PORT || 5000;
 ///////////////////////////////////////////////////////user//////////////////////////////////////////////////////////////////////////
 
 
-
 app.post('/login', async (req, res) => {
   try {
     const { email, mdp } = req.body;
+
     const employee = await Employee.authenticate(email, mdp);
     
     if (!employee) {
@@ -85,14 +85,27 @@ const authenticateToken = (req, res, next) => {
 };
 
 /////////////////////////////////////////////////////////////////Dashboard//////////////////////////////////////////////////////////
-const restrictTo = (roles) => {
-  return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Access denied' });
+app.get('/api/user', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // Assuming the JWT payload includes the user's ID
+    const result = await pool.query(`
+      SELECT e.*, r.name AS role_name, r.permissions
+      FROM public.employees e
+      LEFT JOIN public.roles r ON e.role_id = r.id
+      WHERE e.id = $1
+    `, [userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
     }
-    next();
-  };
-};
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+    res.status(500).json({ error: 'Failed to fetch user data' });
+  }
+});
+
 app.get('/dashboard', authenticateToken, async (req, res) => {
   try {
   
@@ -949,7 +962,125 @@ app.delete('/client-orders/:id', authenticateToken, async (req, res) => {
 });
 
 ///////////////////////////////////////////////////////employe///////////////////////////////////////////////////////////////////////////////
+// Endpoint to create or update a role for an employee
+// Fetch all roles
+app.get('/api/roles', authenticateToken, async (req, res) => {
+  try {
+    const query = `
+      SELECT id, name, description, permissions
+      FROM public.roles
+      ORDER BY name;
+    `;
+    const result = await pool.query(query);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching roles:', error);
+    res.status(500).json({ error: 'Failed to fetch roles' });
+  }
+});
+app.get('/roles', async (req, res) => {
+  try {
+    const roles = await pool.query('SELECT id, name FROM roles');
+    res.json(roles);
+  } catch (error) {
+    console.error('Error fetching roles:', error);
+    res.status(500).json({ error: 'Failed to fetch roles' });
+  }
+});
+// Create or update a role
+app.post('/api/roles', authenticateToken, async (req, res) => {
+  try {
+    const { name, description, permissions } = req.body;
 
+    if (!name || !permissions) {
+      return res.status(400).json({ error: 'Role name and permissions are required' });
+    }
+
+    const existingRole = await pool.query('SELECT * FROM roles WHERE name = $1', [name]);
+    let role;
+
+    if (existingRole.rows.length > 0) {
+      const query = `
+        UPDATE roles 
+        SET description = $1, permissions = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE name = $3
+        RETURNING *;
+      `;
+      const result = await pool.query(query, [description || null, permissions, name]);
+      role = result.rows[0];
+    } else {
+      const query = `
+        INSERT INTO roles (name, description, permissions, created_at, updated_at)
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        RETURNING *;
+      `;
+      const result = await pool.query(query, [name, description || null, permissions]);
+      role = result.rows[0];
+    }
+
+    res.status(201).json(role);
+  } catch (error) {
+    console.error('Error creating/updating role:', error);
+    res.status(500).json({ error: 'Failed to create/update role' });
+  }
+});
+
+// Update an existing role
+app.put('/api/roles/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, permissions } = req.body;
+
+    if (!name || !permissions) {
+      return res.status(400).json({ error: 'Role name and permissions are required' });
+    }
+
+    const query = `
+      UPDATE roles 
+      SET name = $1, description = $2, permissions = $3, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [name, description || null, permissions, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Role not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating role:', error);
+    res.status(500).json({ error: 'Failed to update role' });
+  }
+});
+
+// Assign a role to an employee
+app.post('/api/assign-role', authenticateToken, async (req, res) => {
+  try {
+    const { employeeId, roleId } = req.body;
+
+    if (!employeeId || !roleId) {
+      return res.status(400).json({ error: 'Employee ID and Role ID are required' });
+    }
+
+    const query = `
+      UPDATE employees
+      SET role_id = $1
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const result = await pool.query(query, [roleId, employeeId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Employee not found' });
+    }
+
+    res.json({ message: 'Role assigned successfully' });
+  } catch (error) {
+    console.error('Error assigning role:', error);
+    res.status(500).json({ error: 'Failed to assign role' });
+  }
+});
 
 // Employee Routes
 app.get('/getEmployes', async (req, res) => {
@@ -983,18 +1114,16 @@ app.post('/saveEmployes', async (req, res) => {
       first_name, 
       last_name, 
       email, 
-     
       department, 
       hire_date, 
       phone_number, 
       address, 
       salary,
-      mdp,
-      role = 'Worker'
+      mdp
     } = req.body;
 
     // Validate required fields
-    if (!first_name || !last_name || !email  || !department || !phone_number || !address) {
+    if (!first_name || !last_name || !email || !department || !phone_number || !address) {
       return res.status(400).json({ 
         error: 'Validation error', 
         message: 'All fields except salary and password are required' 
@@ -1002,7 +1131,7 @@ app.post('/saveEmployes', async (req, res) => {
     }
 
     // Validate department enum
-    if (!['Sales', 'Human Resource', 'Stock', 'Finance', 'Operations','Purchasing'].includes(department)) {
+    if (!['Sales', 'Human Resource', 'Stock', 'Finance', 'Operations', 'Purchasing'].includes(department)) {
       return res.status(400).json({ 
         error: 'Validation error', 
         message: 'Invalid department' 
@@ -1013,13 +1142,12 @@ app.post('/saveEmployes', async (req, res) => {
       first_name,
       last_name,
       email,
-       department,
+      department,
       hire_date || new Date(),
       phone_number,
       address,
       salary || 0.00,
-      mdp,
-      role
+      mdp
     );
 
 
@@ -1044,12 +1172,11 @@ app.put('/updateEmployes/:id', async (req, res) => {
       phone_number, 
       address, 
       salary,
-      mdp,
-      role 
+      mdp
     } = req.body;
 
     // Validate department if provided
-    if (department && !['Sales', 'Human Resource', 'Stock', 'Finance', 'Operations','Purchasing'].includes(department)) {
+    if (department && !['Sales', 'Human Resource', 'Stock', 'Finance', 'Operations', 'Purchasing'].includes(department)) {
       return res.status(400).json({ 
         error: 'Validation error', 
         message: 'Invalid department' 
@@ -1066,8 +1193,7 @@ app.put('/updateEmployes/:id', async (req, res) => {
       phone_number,
       address,
       salary,
-      mdp,
-      role
+      mdp
     );
 
     if (!employee) {

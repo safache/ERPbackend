@@ -5,9 +5,12 @@ const jwt = require('jsonwebtoken');
 class Employee {
   static async getAll() {
     try {
-      const result = await pool.query(
-        'SELECT * FROM public.employees ORDER BY id DESC'
-      );
+      const result = await pool.query(`
+        SELECT e.*, r.name AS role_name
+        FROM public.employees e
+        LEFT JOIN public.roles r ON e.role_id = r.id
+        ORDER BY e.id DESC
+      `);
       return result.rows;
     } catch (error) {
       console.error('Error in Employee.getAll:', error);
@@ -15,12 +18,15 @@ class Employee {
     }
   }
 
+
   static async getById(id) {
     try {
-      const result = await pool.query(
-        'SELECT * FROM public.employees WHERE id = $1',
-        [id]
-      );
+      const result = await pool.query(`
+        SELECT e.*, r.name AS role_name
+        FROM public.employees e
+        LEFT JOIN public.roles r ON e.role_id = r.id
+        WHERE e.id = $1
+      `, [id]);
       return result.rows[0];
     } catch (error) {
       console.error('Error in Employee.getById:', error);
@@ -28,10 +34,10 @@ class Employee {
     }
   }
 
-  static async create(first_name, last_name, email,  department, hire_date, phone_number, address, salary, mdp = 'defaultPassword123', role = 'Worker') {
+  static async create(first_name, last_name, email, department, hire_date, phone_number, address, salary, mdp = 'defaultPassword123') {
     try {
       // Validate required fields
-      if (!first_name || !last_name || !email  || !department || !phone_number || !address) {
+      if (!first_name || !last_name || !email || !department || !phone_number || !address) {
         throw new Error('Missing required fields');
       }
 
@@ -40,8 +46,8 @@ class Employee {
 
       const result = await pool.query(
         `INSERT INTO public.employees 
-         (first_name, last_name, email,  department, hire_date, phone_number, address, salary, mdp, role) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::employee_role) 
+         (first_name, last_name, email, department, hire_date, phone_number, address, salary, mdp) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) 
          RETURNING *`,
         [
           first_name.trim(),
@@ -52,8 +58,7 @@ class Employee {
           phone_number.trim(),
           address.trim(),
           salary ? parseFloat(salary) : 0.00,
-          hashedPassword,
-          role
+          hashedPassword
         ]
       );
 
@@ -64,7 +69,7 @@ class Employee {
     }
   }
 
-  static async update(id, first_name, last_name, email, department, hire_date, phone_number, address, salary, role) {
+  static async update(id, first_name, last_name, email, department, hire_date, phone_number, address, salary) {
     try {
       // Verify employee exists
       const existingEmployee = await pool.query(
@@ -76,10 +81,6 @@ class Employee {
         throw new Error(`Employee with ID ${id} not found`);
       }
 
-      // Validate role enum value
-      const validRoles = ['Admin', 'Manager', 'Worker'];
-      const validatedRole = role && validRoles.includes(role) ? role : existingEmployee.rows[0].role;
-
       const result = await pool.query(
         `UPDATE public.employees 
          SET first_name = $1,
@@ -90,9 +91,8 @@ class Employee {
              phone_number = $6,
              address = $7,
              salary = $8,
-             role = $9::employee_role,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $10 
+         WHERE id = $9 
          RETURNING *`,
         [
           first_name?.trim() || existingEmployee.rows[0].first_name,
@@ -103,7 +103,6 @@ class Employee {
           phone_number?.trim() || existingEmployee.rows[0].phone_number,
           address?.trim() || existingEmployee.rows[0].address,
           salary !== undefined ? parseFloat(salary) : existingEmployee.rows[0].salary,
-          validatedRole,
           id
         ]
       );
@@ -132,10 +131,15 @@ class Employee {
     }
   }
 
+
+  
   static async authenticate(email, mdp) {
     try {
       const result = await pool.query(
-        'SELECT * FROM public.employees WHERE email = $1',
+        `SELECT e.*, r.name AS role_name, r.description, r.permissions
+         FROM public.employees e
+         LEFT JOIN public.roles r ON e.role_id = r.id
+         WHERE e.email = $1`,
         [email.toLowerCase()]
       );
 
@@ -150,15 +154,12 @@ class Employee {
         return null;
       }
 
-      // Generate JWT token
       const token = jwt.sign(
         { 
           id: employee.id, 
-          email: employee.email,
-          role: employee.role 
+          email: employee.email
         },
-        process.env.JWT_SECRET || 'your-secret-key',
-        
+        process.env.JWT_SECRET || 'your-secret-key'
       );
 
       return {
@@ -166,8 +167,13 @@ class Employee {
         first_name: employee.first_name,
         last_name: employee.last_name,
         email: employee.email,
-        role: employee.role,
         department: employee.department,
+        position: employee.position,
+        role: employee.role_name ? {
+          name: employee.role_name,
+          description: employee.description,
+          permissions: employee.permissions
+        } : null,
         token
       };
     } catch (error) {
@@ -176,5 +182,6 @@ class Employee {
     }
   }
 }
+
 
 module.exports = Employee;

@@ -13,7 +13,6 @@ class Dashboard {
         stockMovements,
         employeeStats,
         monthlyRevenue,
-        // Add new purchaseOrdersTotal query
         purchaseOrdersTotal
       ] = await Promise.all([
         // 1. Order statistics by status
@@ -98,11 +97,14 @@ class Dashboard {
           LIMIT 10
         `),
 
-        // 7. Employee statistics
+        // 7. Employee statistics (Fixed: Join with roles table)
         pool.query(`
-          SELECT role, COUNT(*) as count
-          FROM employees
-          GROUP BY role
+          SELECT 
+            COALESCE(r.name, 'No Role') as role_name, 
+            COUNT(e.id) as count
+          FROM employees e
+          LEFT JOIN roles r ON e.role_id = r.id
+          GROUP BY r.name
           ORDER BY count DESC
         `),
 
